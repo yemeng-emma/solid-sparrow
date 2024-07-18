@@ -1,3 +1,27 @@
+# Data and output
+/data
+/output
+/sandbox
+
+# Ignore HTML files
+*.html
+
+# Ignore PDF files
+*.pdf
+
+# Ignore Word files
+*.docx
+
+# Ignore LaTeX files
+*.tex
+*.log
+*.aux
+*.out
+
+# Ignore R Markdown cache and figures directories
+*_cache/
+*_files/
+
 # History files
 .Rhistory
 .Rapp.history
