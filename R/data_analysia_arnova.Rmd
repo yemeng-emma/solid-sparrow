@@ -1,0 +1,424 @@
+---
+title: "Data cleanning"
+author: "Meng Ye"
+date: "2/22/2022"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(plm)
+library(tidyverse)
+library(modelsummary)
+library(readxl)
+library(lme4)
+library(brms)
+library(equatiomatic)
+library(broom.mixed)
+library(tidybayes)
+```
+
+
+```{r load-clean-data, warning=FALSE, message=FALSE}
+# Load original data
+arts_raw <- read_csv("data/arts_raw.csv")
+## CPI data
+cpi <- read_excel("data/cpi.xlsx")
+```
+
+```{r}
+brm_free_earned <- read_rds("data/brm_free_earned.rds")
+```
+
+```{r}
+brm_free_ubi <- read_rds("data/brm_free_ubi.rds")
+```
+
+
+
+
+```{r}
+# select columns to use in the preliminary analysis 
+arts_selected <- arts_raw %>% 
+  select(year = fiscal_year, 
+         ein = organizations_tax_id, 
+         founded = organizations_year_founded,
+         board_size = organizations_nmbr_board_members,
+         sub_field = organizations_cdp_taxonomy_name,
+         rbi = total_earned_revenue_operating_program,
+         ubi = total_earned_revenue_operating_non_program,
+         total_contribution = total_contributed_revenue_formula,
+         total_revenue = total_revenue_formula,
+         total_expenses = total_expenses_formula,
+         total_paid_attendees,
+         total_free_attendees,
+         total_attendees) %>% 
+  mutate(across(where(is.numeric), ~ ifelse(.x < 0, 0, .x))) %>% 
+  mutate(age = 2022-founded,
+         across(c(ubi, rbi), ~ ifelse(is.na(.x), 0, .x)),
+         ubi_ratio = ubi/(rbi+ubi)*100,
+         free_ratio = total_free_attendees/total_attendees *100,
+         earned_ratio = (rbi+ubi)/total_revenue*100,
+         log_attendee = log(total_attendees),
+         attendee_scaled = scale(total_attendees),
+         ein = factor(ein)) %>% 
+  filter( year >= 2010)
+
+```
+
+```{r}
+# deriving new variables based on the data
+value_2010 <- cpi %>% 
+  filter(Year == 2010) %>% 
+  pull(CPI)
+
+# inflation adjustment
+arts <- arts_selected %>% 
+  left_join(cpi, by = c("year" = "Year")) %>% 
+  mutate(cpi2010 = CPI/value_2010) %>% 
+  mutate(across(c(rbi, ubi, total_contribution, 
+                  total_revenue, total_expenses), ~ ./cpi2010, .names = "{.col}_adjusted")) %>% 
+  mutate(total_contribution_adjusted_l = log(total_contribution_adjusted),
+         total_expenses_adjusted_l = log(total_expenses_adjusted)) %>% 
+  mutate(across(where(is.numeric), ~ ifelse(.x == Inf | .x == -Inf , 0, .x)))
+
+
+```
+
+
+
+CPI data source: https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-
+
+## Visual
+
+The general year trend
+
+```{r fig.height=5, fig.width=8}
+plot_attend_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = total_attendees))+
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 40000)) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_attend_year
+```
+
+
+```{r fig.height=5, fig.width=8}
+plot_free_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = free_ratio))+
+  geom_boxplot() +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_free_year
+```
+
+```{r}
+plot_free_ubi <- ggplot(arts,
+                           aes(x = ubi_ratio, y = free_ratio, color = sub_field))+
+  geom_point(size = 0.1) +
+  geom_smooth(method = "lm", se = FALSE, color = "gray", size = 0.5) +
+  coord_cartesian(xlim = c(0, 100)) +
+
+  facet_wrap(vars(sub_field))
+plot_free_ubi
+```
+
+## Model fitting 
+
+### Pooled OLS
+
+```{r testing}
+#pooled panel 
+model_free_ubi <- lm(free_ratio ~ year+ ubi_ratio + 
+                     total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age +
+                  sub_field, data = arts)
+summary(model_free_ubi)
+
+```
+
+
+```{r ols2}
+#pooled panel 
+model_free_both <- lm(free_ratio ~ year+  earned_ratio +
+                       total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age 
+                 +  sub_field,
+             data = arts)
+summary(model_free_both)
+
+```
+
+
+```{r ols3}
+#pooled panel 
+model_attend_ubi <- lm(log_attendee ~  ubi_ratio + sub_field ,
+             data = arts)
+summary(model_attend_ubi)
+
+```
+
+
+```{r ols4}
+#pooled panel 
+model_attend_both <- lm(log_attendee ~ year+  earned_ratio +
+                       total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age +
+                  sub_field,
+             data = arts)
+summary(model_free_both)
+
+```
+
+
+
+## lmer models
+
+```{r}
+mlm_free_ubi <- lmer(free_ratio ~ ubi_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_ubi)
+```
+
+```{r}
+mlm_free_both <- lmer(free_ratio ~ earned_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_both)
+```
+
+```{r}
+mlm_attend_both <- lmer(log_attendee ~ earned_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_attend_both)
+```
+
+
+```{r}
+mlm_attend_ubi <- lmer(log_attendee ~ ubi_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_attend_ubi)
+```
+
+
+
+$$
+\begin{aligned}
+  \operatorname{free\_ratio}_{i}  &\sim N \left(\mu, \sigma^2 \right) \\
+    \mu &=\alpha_{j[i],k[i],l[i]} + \beta_{1}(\operatorname{ubi\_ratio}) + \beta_{2}(\operatorname{\log(total\_contribution\_adjusted)}) + \beta_{3}(\operatorname{\log(total\_expenses\_adjusted)}) \\
+    \alpha_{j}  &\sim N \left(\mu_{\alpha_{j}}, \sigma^2_{\alpha_{j}} \right)
+    \text{, for ein:sub\_field j = 1,} \dots \text{,J} \\
+    \alpha_{k}  &\sim N \left(\mu_{\alpha_{k}}, \sigma^2_{\alpha_{k}} \right)
+    \text{, for year k = 1,} \dots \text{,K} \\
+    \alpha_{l}  &\sim N \left(\mu_{\alpha_{l}}, \sigma^2_{\alpha_{l}} \right)
+    \text{, for sub\_field l = 1,} \dots \text{,L}
+\end{aligned}
+$$
+From Bayes rules!
+$$
+\begin{equation}
+Y_{ij} | \beta_{0j}, \beta_{1j}, \sigma \sim N\left(\mu_{ij}, \sigma^2\right) \;\; \text{ with } \;\; \mu_{ij} = \beta_{0j} + \beta_{1j} X_{ij}.
+\end{equation}
+$$
+
+
+
+
+
+## Bayesian models 
+
+
+
+```{r brm}
+brm_free_ubi <- brm(
+  bf(free_ratio ~ ubi_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l),
+                     data = arts,
+  family = gaussian(),
+  cores = 4, chains = 4,
+  backend = "cmdstanr", seed = 1234)
+summary(brm_free_ubi)
+```
+
+
+```{r}
+saveRDS(brm_free_ubi, "data/brm_free_ubi.rds")
+```
+
+
+```{r}
+brm_free_ubi |> 
+  linpred_draws(arts, ndraws = 200, re_formula = NA) |> 
+  ggplot(aes(x = age, y = net)) +
+  stat_lineribbon(aes(y = .linpred), fill = clrs[4], color = clrs[4], alpha = 0.2) +
+  labs(x = "Age", y = "Race time")
+```
+
+
+
+```{r}
+pp_check(brm_free_ubi, ndraws = 25)
+```
+
+```{r}
+coefs_brm_free_ubi <- brm_free_ubi %>% 
+  tidy(effects = c("fixed"), conf.level = 0.95) 
+coefs_brm_free_ubi
+```
+
+```{r}
+get_variables(brm_free_ubi)
+```
+
+
+
+```{r brm attend}
+#click this
+brm_free_earned <- brm(
+  bf(free_ratio ~ earned_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l),
+                     data = arts,
+  family = gaussian(),
+  cores = 4, chains = 4,
+  backend = "cmdstanr", seed = 1234)
+summary(brm_free_earned)
+```
+
+```{r}
+saveRDS(brm_free_earned, "data/brm_free_earned.rds")
+```
+
+
+```{r}
+coefs_brm_free_ubi <- brm_free_ubi %>% 
+  tidy(effects = c("fixed"), conf.level = 0.95) 
+coefs_brm_free_ubi
+```
+
+```{r}
+gof_map <- tribble(
+  ~raw,        ~clean,     ~fmt, ~omit,
+  "nobs",      "N",        0,    TRUE
+)
+
+modelsummary(list("Model free ubi" = brm_free_ubi, "Model free earned income" = brm_free_earned),
+             conf_level = 0.95,
+             estimate = "{estimate}",
+             fmt = 3, gof_map = gof_map, 
+             metrics = c("none"),
+             statistic = "conf.int")
+```
+
+
+## Plm
+
+```{r}
+#pooled panel 
+model_attendence_ubi <- lm(total_attendees ~ year+ ubi_ratio + log(total_contribution_adjusted) 
+                 +  sub_field,
+             data = arts)
+summary(model_attendence_ubi)
+
+```
+
+
+
+
+
+```{r attendence}
+#pooled panel 
+model_ubi_attend <- lm(total_attendees ~  log(ubi) + log(rbi) + log(total_contribution) 
+                 + log(total_expenses) + board_size + age + sub_field,
+             data = arts)
+summary(model_ubi_attend)
+```
+
+
+```{r}
+modelsummary(list("ratio pooled" = model_ubi_ratio, "attendence pooled" = model_ubi_attend),
+             statistic = "{std.error} ({p.value}) {stars}")
+```
+
+
+```{r }
+#pooled panel 
+model1 <- lm(free_ratio ~  log(rbi) + log(ubi) + log(total_contribution) + age,
+             data = filter(arts, sub_field !="Performing Arts"))
+summary(model1)
+```
+
+
+```{r}
+arts_panel <- arts %>% 
+  drop_na(ein, year) %>% 
+  group_by(ein, year) %>% 
+  slice(1) %>% 
+  ungroup()
+  
+```
+
+```{r}
+fe_attend_ubi<- plm(free_ratio ~ ubi_ratio + 
+                    log(total_expenses_adjusted) + log(total_contribution_adjusted) + sub_field , 
+                  data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "fd")
+
+summary(fe_attend_ubi)
+```
+
+```{r}
+re_free_ubi<- plm(free_ratio ~ ubi_ratio + log(total_contribution_ajusted) + sub_field , data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "random")
+
+summary(fe_model)
+```
+```{r}
+random_model<- plm(free_ratio ~ log(ubi) + log(rbi) + log(total_contribution)+ age + board_size + sub_field +
+                 log(total_expenses), 
+                   data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "random")
+
+summary(random_model)
+```
+
+```{r}
+phtest(fe_model, random_model)
+```
+
+
+```{r}
+fe_model2<- plm(total_attendees ~ log(ubi) + log(rbi) + log(total_contribution) +
+                  + age + board_size + sub_field + log(total_expenses), data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "fd")
+
+summary(fe_model2)
+```
+
+
+```{r}
+random_model2<- plm(total_attendees ~ log(ubi) + log(rbi) + log(total_contribution), data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "random")
+
+summary(random_model2)
+```
+
+```{r}
+phtest(fe_model2, random_model2)
+```
+
+```{r}
+modelsummary(list("ratio pooled" = model_ubi_ratio, "ratio fe" = fe_model, "attendence pooled" = model_ubi_attend,
+                  "attendence fe"= fe_model2),
+             coef_omit = "sub_field",
+             statistic = "({p.value}) {stars}")
+```

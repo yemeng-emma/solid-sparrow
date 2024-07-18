@@ -1,0 +1,161 @@
+---
+title: "Data cleanning"
+author: "Meng Ye"
+date: "2/22/2022"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(plm)
+library(tidyverse)
+library(modelsummary)
+library(readxl)
+
+```
+
+
+```{r load-clean-data, warning=FALSE, message=FALSE}
+# Load original data
+arts_raw <- read_csv("data/arts_raw.csv")
+## CPI data
+cpi <- read_excel("data/cpi.xlsx")
+```
+
+```{r}
+# select columns to use in the preliminary analysis 
+arts <- arts_raw %>% 
+  select(year = fiscal_year, 
+         ein = organizations_tax_id, 
+         founded = organizations_year_founded,
+         board_size = organizations_nmbr_board_members,
+         sub_field = organizations_cdp_taxonomy_name,
+         rbi = total_earned_revenue_operating_program,
+         ubi = total_earned_revenue_operating_non_program,
+         total_contribution = total_contributed_revenue_formula,
+         total_revenue = total_revenue_formula,
+         total_expenses = total_expenses_formula,
+         total_paid_attendees,
+         total_free_attendees,
+         total_attendees) %>% 
+  mutate(free_ratio = total_free_attendees/total_attendees*100,
+         age = 2022-founded,
+         rbi = ifelse(rbi == 0, NA, rbi),
+         ubi = ifelse(ubi == 0, NA, ubi),
+         total_contribution = ifelse(total_contribution == 0, NA, total_contribution),
+         total_expenses = ifelse(total_expenses == 0, NA, total_expenses),
+         log_attendee = log(total_attendees),
+         ein = factor(ein)) %>% 
+  filter(year<= 2019 & year > 2010)
+summary(arts$free_ratio)
+table(arts$sub_field)
+```
+
+```{r}
+# deriving new variables based on the data
+
+# inflation adjustment
+
+
+```
+
+##
+
+CPI data source: https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-
+
+
+
+```{r testing}
+#pooled panel 
+model_ubi_ratio <- lm(free_ratio ~  log(ubi) + log(rbi) + log(total_contribution) 
+                 + log(total_expenses) + board_size + age + sub_field,
+             data = arts)
+summary(model_ubi_ratio)
+
+```
+
+```{r attendence}
+#pooled panel 
+model_ubi_attend <- lm(total_attendees ~  log(ubi) + log(rbi) + log(total_contribution) 
+                 + log(total_expenses) + board_size + age + sub_field,
+             data = arts)
+summary(model_ubi_attend)
+```
+
+
+```{r}
+modelsummary(list("ratio pooled" = model_ubi_ratio, "attendence pooled" = model_ubi_attend),
+             statistic = "{std.error} ({p.value}) {stars}")
+```
+
+
+```{r }
+#pooled panel 
+model1 <- lm(free_ratio ~  log(rbi) + log(ubi) + log(total_contribution) + age,
+             data = filter(arts, sub_field !="Performing Arts"))
+summary(model1)
+```
+
+
+```{r}
+arts_panel <- arts %>% 
+  drop_na(ein, year) %>% 
+  group_by(ein, year) %>% 
+  slice(1) %>% 
+  ungroup()
+  
+```
+
+```{r}
+fe_model<- plm(free_ratio ~ log(ubi) + log(rbi) + log(total_contribution) + age + board_size + 
+                 log(total_expenses), data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "fd")
+
+summary(fe_model)
+```
+```{r}
+random_model<- plm(free_ratio ~ log(ubi) + log(rbi) + log(total_contribution)+ age + board_size + sub_field +
+                 log(total_expenses), 
+                   data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "random")
+
+summary(random_model)
+```
+
+```{r}
+phtest(fe_model, random_model)
+```
+
+
+```{r}
+fe_model2<- plm(total_attendees ~ log(ubi) + log(rbi) + log(total_contribution) +
+                  + age + board_size + sub_field + log(total_expenses), data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "fd")
+
+summary(fe_model2)
+```
+
+
+```{r}
+random_model2<- plm(total_attendees ~ log(ubi) + log(rbi) + log(total_contribution), data = arts_panel,
+                  index = c("ein", "year"), 
+                  effect = "individual", model = "random")
+
+summary(random_model2)
+```
+
+```{r}
+phtest(fe_model2, random_model2)
+```
+
+```{r}
+modelsummary(list("ratio pooled" = model_ubi_ratio, "ratio fe" = fe_model, "attendence pooled" = model_ubi_attend,
+                  "attendence fe"= fe_model2),
+             coef_omit = "sub_field",
+             statistic = "({p.value}) {stars}")
+```

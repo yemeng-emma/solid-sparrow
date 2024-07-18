@@ -1,0 +1,395 @@
+---
+title: "Data cleanning"
+author: "Meng Ye"
+date: "2/22/2022"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(MetBrewer)
+library(tidyverse)
+library(modelsummary)
+library(readxl)
+library(lme4)
+
+```
+
+
+```{r load-clean-data, warning=FALSE, message=FALSE}
+# Load original data
+arts_raw <- read_csv("data/arts_raw.csv")
+## CPI data
+cpi <- read_excel("data/cpi.xlsx")
+```
+
+
+
+```{r}
+# select columns to use in the preliminary analysis 
+arts_selected <- arts_raw %>% 
+  select(year = fiscal_year, 
+         ein = organizations_tax_id, 
+         founded = organizations_year_founded,
+         board_size = organizations_nmbr_board_members,
+         sub_field = organizations_cdp_taxonomy_name,
+         rbi = total_earned_revenue_operating_program,
+         ubi = total_earned_revenue_operating_non_program,
+         total_contribution = total_contributed_revenue_formula,
+         total_revenue = total_revenue_formula,
+         total_expenses = total_expenses_formula,
+         total_paid_attendees,
+         total_free_attendees,
+         total_attendees) %>% 
+  mutate(across(where(is.numeric), ~ ifelse(.x < 0, 0, .x))) %>% 
+  mutate(age = 2022-founded,
+         across(c(ubi, rbi), ~ ifelse(is.na(.x), 0, .x)),
+         ubi_ratio = ubi/(rbi+ubi)*100,
+         free_ratio = total_free_attendees/total_attendees *100,
+         earned_ratio = (rbi+ubi)/total_revenue*100,
+         rbi_share = rbi/total_revenue*100,
+         ubi_share = ubi/total_revenue*100,
+         log_attendee = log(total_attendees),
+         attendee_scaled = scale(total_attendees),
+         ein = factor(ein)) %>% 
+  filter( year >= 2010)
+
+```
+
+
+
+```{r}
+# deriving new variables based on the data
+value_2010 <- cpi %>% 
+  filter(Year == 2010) %>% 
+  pull(CPI)
+
+# inflation adjustment
+arts <- arts_selected %>% 
+  left_join(cpi, by = c("year" = "Year")) %>% 
+  mutate(cpi2010 = CPI/value_2010) %>% 
+  mutate(across(c(rbi, ubi, total_contribution, 
+                  total_revenue, total_expenses), ~ ./cpi2010, .names = "{.col}_adjusted")) %>% 
+  mutate(total_contribution_adjusted_l = log(total_contribution_adjusted),
+         total_expenses_adjusted_l = log(total_expenses_adjusted)) %>% 
+  mutate(across(where(is.numeric), ~ ifelse(.x == Inf | .x == -Inf , 0, .x))) %>% 
+  mutate(across(ends_with("_raito"), ~ ifelse(.x > 100 , NA, .x))) %>% 
+  mutate(across(ends_with("_share"), ~ ifelse(.x > 100 , NA, .x))) %>% 
+  mutate(across(where(is.numeric), ~ scale(.x, scale = FALSE), .names = "{.col}_centered"))
+
+```
+
+
+```{r}
+glimpse(arts)
+```
+
+
+CPI data source: https://www.minneapolisfed.org/about-us/monetary-policy/inflation-calculator/consumer-price-index-1913-
+
+## Visual
+
+The general year trend
+
+```{r fig.height=5, fig.width=8}
+plot_attend_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = total_attendees))+
+  geom_boxplot() +
+  coord_cartesian(ylim = c(0, 40000)) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_attend_year
+```
+
+
+```{r fig.height=4, fig.width=9}
+plot_free_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = free_ratio))+
+  geom_boxplot() +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_free_year
+```
+
+
+
+
+```{r fig.height=4, fig.width=9}
+plot_ubi_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = ubi_ratio)) +
+  geom_boxplot() +
+#  coord_cartesian(ylim = c(0, 40000)) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_ubi_year
+```
+
+```{r fig.height=4, fig.width=9}
+plot_rbi_year <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = factor(year), y = rbi_share)) +
+  geom_boxplot() +
+#  coord_cartesian(ylim = c(0, 100)) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 0.5, vjust = 0.5))
+plot_rbi_year
+```
+
+
+
+
+```{r}
+plot_free_ubi <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                        aes(x = ubi_ratio, y = free_ratio, color = sub_field))+
+  geom_point(size = 0.1) +
+  geom_smooth( se = F, color = "black", size = 0.7) +
+  #  coord_cartesian(xlim = c(0, 150), ylim = c(0, 150)) +
+  scale_color_manual(values=met.brewer("Hokusai1", 6)) +
+  
+  guides(color = FALSE) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw()
+plot_free_ubi
+```
+
+
+```{r}
+plot_free_rbi <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = rbi_share, y =free_ratio, color = sub_field))+
+  geom_point(size = 0.1) +
+  geom_smooth(method = lm, se = F, color = "black", size = 0.7) +
+#  coord_cartesian(xlim = c(0, 150), ylim = c(0, 150)) +
+guides(color = FALSE) +
+  facet_wrap(vars(sub_field)) +
+    scale_color_manual(values=met.brewer("Hokusai1", 6)) +
+
+  theme_bw()
+plot_free_rbi
+```
+
+```{r}
+plot_attend_ubi <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = ubi_ratio, y = log_attendee, color = sub_field))+
+  geom_point(size = 0.1) +
+  geom_smooth(method = lm, se = F, color = "black", size = 0.7) +
+#  coord_cartesian(xlim = c(0, 150), ylim = c(0, 150)) +
+      scale_color_manual(values=met.brewer("Hokusai1", 6)) +
+
+guides(color = FALSE) +
+  facet_wrap(vars(sub_field)) +
+  theme_bw()
+plot_attend_ubi
+```
+
+
+```{r}
+plot_attend_rbi <- ggplot(filter(arts, sub_field!="Unknown/Unclassified"),
+                           aes(x = rbi_share, y =log_attendee, color = sub_field))+
+  geom_point(size = 0.1) +
+  geom_smooth(method = lm, se = F, color = "black", size = 0.7) +
+#  coord_cartesian(xlim = c(0, 150), ylim = c(0, 150)) +
+guides(color = FALSE) +
+  facet_wrap(vars(sub_field)) +
+    scale_color_manual(values=met.brewer("Hokusai1", 6)) +
+
+  theme_bw()
+plot_attend_rbi
+```
+
+
+```{r}
+ggsave(plot_attend_year, filename = "data/attend_year.png",
+       width = 9, height = 4, units = "in", bg = "white")
+
+ggsave(plot_free_year, filename = "data/free_year.png",
+       width = 9, height = 4, units = "in", bg = "white")
+
+ggsave(plot_free_rbi, filename = "data/free_rbi.png",
+       width = 8.5, height = 4, units = "in", bg = "white")
+
+ggsave(plot_free_ubi, filename = "data/free_ubi.png",
+       width = 8.5, height = 4, units = "in", bg = "white")
+
+ggsave(plot_attend_rbi, filename = "data/attend_rbi.png",
+       width = 8.5, height = 4, units = "in", bg = "white")
+
+ggsave(plot_attend_ubi, filename = "data/attend_ubi.png",
+       width = 8.5, height = 4, units = "in", bg = "white")
+
+
+```
+
+
+## Model fitting 
+
+### Pooled OLS
+
+```{r testing}
+#pooled panel 
+model_free_ubi <- lm(free_ratio ~ year+ ubi_ratio + 
+                     total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age +
+                  sub_field, data = arts)
+summary(model_free_ubi)
+
+```
+
+
+```{r ols2}
+#pooled panel 
+model_free_both <- lm(free_ratio ~ year +  earned_ratio +
+                       total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age 
+                 +  sub_field,
+             data = arts)
+summary(model_free_both)
+
+```
+
+
+```{r ols3}
+#pooled panel 
+model_attend_ubi <- lm(log_attendee ~  ubi_ratio + sub_field ,
+             data = arts)
+summary(model_attend_ubi)
+
+```
+
+
+```{r ols4}
+#pooled panel 
+model_attend_both <- lm(log_attendee ~ year+  earned_ratio +
+                       total_contribution_adjusted_l  + total_expenses_adjusted_l + board_size + age +
+                  sub_field,
+             data = arts)
+summary(model_free_both)
+
+```
+
+
+
+## lmer models
+
+```{r}
+mlm_free_ubi <- lmer(free_ratio ~ ubi_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_ubi)
+```
+
+```{r}
+mlm_free_ubi_share <- lmer(free_ratio ~ ubi_share + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_ubi_share)
+```
+
+ 
+```{r}
+mlm_free_rbi_share <- lmer(free_ratio ~ rbi_share + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_rbi_share)
+```
+
+
+
+
+
+```{r}
+mlm_free_both <- lmer(free_ratio ~ earned_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_free_both)
+```
+
+```{r}
+mlm_attend_rbi_share <- lmer(log_attendee ~ rbi_share + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_attend_rbi_share)
+```
+
+
+```{r}
+mlm_attend_ubi <- lmer(log_attendee ~ ubi_ratio + year + (1 | year) + (1 | sub_field/ein) +
+                    total_contribution_adjusted_l  + total_expenses_adjusted_l,
+                     data = arts)
+summary(mlm_attend_ubi)
+```
+
+
+
+$$
+\begin{aligned}
+  \operatorname{free\_ratio}_{i}  &\sim N \left(\mu, \sigma^2 \right) \\
+    \mu &=\alpha_{j[i],k[i],l[i]} + \beta_{1}(\operatorname{ubi\_ratio}) + \beta_{2}(\operatorname{\log(total\_contribution\_adjusted)}) + \beta_{3}(\operatorname{\log(total\_expenses\_adjusted)}) \\
+    \alpha_{j}  &\sim N \left(\mu_{\alpha_{j}}, \sigma^2_{\alpha_{j}} \right)
+    \text{, for ein:sub_field j = 1,} \dots \text{,J} \\
+    \alpha_{k}  &\sim N \left(\mu_{\alpha_{k}}, \sigma^2_{\alpha_{k}} \right)
+    \text{, for year k = 1,} \dots \text{,K} \\
+    \alpha_{l}  &\sim N \left(\mu_{\alpha_{l}}, \sigma^2_{\alpha_{l}} \right)
+    \text{, for sub_field l = 1,} \dots \text{,l}
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+  \operatorname{free\_ratio}_{it}  &\sim N \left(\mu_i, \sigma^2 \right) \\
+    \mu &=\alpha_{j[i],k[i],l[i]} + \beta_{1}(\operatorname{ubi\_ratio}) + \beta_{2}(\operatorname{\log(total\_contribution\_adjusted)}) + \beta_{3}(\operatorname{\log(total\_expenses\_adjusted)}) \\
+    \alpha_{j}  &\sim N \left(\mu_{\alpha_{j}}, \sigma^2_{\alpha_{j}} \right)
+    \text{, for ein:sub_field j = 1,} \dots \text{,J} \\
+    \alpha_{k}  &\sim N \left(\mu_{\alpha_{k}}, \sigma^2_{\alpha_{k}} \right)
+    \text{, for year k = 1,} \dots \text{,K} \\
+    \alpha_{l}  &\sim N \left(\mu_{\alpha_{l}}, \sigma^2_{\alpha_{l}} \right)
+    \text{, for sub_field l = 1,} \dots \text{,l}
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+\operatorname{free\_ratio}_{i_t} &\sim \mathcal{N}(\mu_{i_t}, \sigma_{i_t}) & \text{Free ratio for org } \;i\; \text{at time} \;t \;\text{with within org-time unit variability}\\
+\mu_{i_t} &= (\beta_{0c}+ b_{0_t} + b_{0_j} + b_{0_i}) + \beta_1 (\operatorname{ubi\_ratio}_{i_t}) + \beta_2 (\operatorname{year}_{i_t})\\
+\ & \; + \beta_{3}(\operatorname{total\_contribution\_adjusted\_log}_{i_t}) + \beta_{4}(\operatorname{total\_expenses\_adjusted\_log}_{i_t}) & \text{Linear model of expected free ratio} \\
+
+
+\text{where}\\
+\beta_{0_c}  & &\text{For global org-year mean} \\
+b_{0_t} &\sim \mathcal{N}(0, \sigma_{0_t}) & \text{Random year group mean offsets with between-year variability} \\
+b_{0_j} &\sim \mathcal{N}(0, \sigma_{0_j}) & \text{Random sub-sector mean offsets with between-sub-sector variability} \\
+b_{0_i} &\sim \mathcal{N}(0, \sigma_{0_i}) & \text{Random org mean offsets within each sub-sector between-org variability} \\
+
+\end{aligned}
+
+$$
+
+
+
+From Bayes rules!
+$$
+\begin{equation}
+Y_{ij} | \beta_{0j}, \beta_{1j}, \sigma \sim N\left(\mu_{ij}, \sigma^2\right) \;\; \text{ with } \;\; \mu_{ij} = \beta_{0j} + \beta_{1j} X_{ij}.
+\end{equation}
+$$
+
+```{r}
+table_mlms<- modelsummary(list( "Model free-rbi" = mlm_free_rbi_share, "Model free-ubi" = mlm_free_ubi,
+                  "Model attend-rbi" = mlm_attend_rbi_share, "Model attend-ubi" = mlm_attend_ubi),
+             fmt = 3,
+             statistic = "({p.value}) {stars}", output = "table_mlms.docx")
+```
+
+```{r}
+print(table_mlms)
+saveRDS(table_mlms, "data/table_mlms.rds")
+
+```
+
+
+```{r}
+```
+
+

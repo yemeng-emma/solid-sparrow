@@ -1,0 +1,30 @@
+---
+title: "Model writing"
+author: "Meng Ye"
+date: "2022-11-09"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+The model goes here
+
+$$
+\begin{aligned}
+\operatorname{free\_ratio}_{i_t} &\sim \mathcal{N}(\mu_{i_t}, \sigma_{i_t}) & \text{Free ratio for org } \;i\; \text{of sub-sector} \;j\; \text{at time} \;t \;\text{with within org-time unit variability}\\
+\mu_{i_t} &= (\beta_{0c}+ b_{0_t} + b_{0_j} + b_{0_{j_i}}) + \beta_1 (\operatorname{ubi\_ratio}_{i_t}) + \beta_2 (\operatorname{year}_{i_t})\\
+\ & \; + \beta_{3}(\operatorname{total\_contribution\_adjusted\_log}_{i_t}) + \beta_{4}(\operatorname{total\_expenses\_adjusted\_log}_{i_t}) & \text{Linear model of expected free ratio} \\
+
+
+
+\text{where}\\
+\beta_{0_c}  & &\text{For global org-year mean} \\
+b_{0_t} &\sim \mathcal{N}(0, \sigma_{0_t}) & \text{Random year group mean offsets with between-year variability} \\
+b_{0_j} &\sim \mathcal{N}(0, \sigma_{0_j}) & \text{Random sub-sector mean offsets with between-sub-sector variability} \\
+b_{0_{j_i}} &\sim \mathcal{N}(0, \sigma_{0_{j_i}}) & \text{Random org mean offsets within each sub-sector between-org variability} \\
+\\
+
+\end{aligned}
+
+$$
