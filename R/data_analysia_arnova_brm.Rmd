@@ -18,14 +18,15 @@ library(brms)
 library(equatiomatic)
 library(broom.mixed)
 library(tidybayes)
+library(here)
 ```
 
 
 ```{r load-clean-data, warning=FALSE, message=FALSE}
 # Load original data
-arts_raw <- read_csv("data/arts_raw.csv")
+arts_raw <- read_csv(here("data", "arts_raw.csv"))
 ## CPI data
-cpi <- read_excel("data/cpi.xlsx")
+cpi <- read_excel(here("data", "cpi.xlsx"))
 ```
 
 ```{r}
@@ -293,7 +294,7 @@ brm_free_ubi <- brm(
                     total_contribution_adjusted_l  + total_expenses_adjusted_l),
                      data = arts,
   family = gaussian(),
-  cores = 4, chains = 4,
+  cores = 8, chains = 4,
   backend = "cmdstanr", seed = 1234)
 summary(brm_free_ubi)
 ```
